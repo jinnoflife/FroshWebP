@@ -2,6 +2,7 @@
 
 namespace FroshWebP\Commands;
 
+use FroshWebP\Components\ImageStack\Arguments;
 use FroshWebP\Factories\WebpConvertFactory;
 use FroshWebP\Models\WebPMedia;
 use FroshWebP\Repositories\WebPMediaRepository;
@@ -9,7 +10,6 @@ use FroshWebP\Services\WebpEncoderFactory;
 use Shopware\Commands\ShopwareCommand;
 use Shopware\Components\Model\ModelManager;
 use Symfony\Component\Console\Helper\ProgressBar;
-use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
@@ -63,9 +63,11 @@ class GenerateWebpImages extends ShopwareCommand
         $this
             ->setName('frosh:webp:generate')
             ->setDescription('Generate webp images for all orginal images')
-            ->addArgument('stack', InputArgument::OPTIONAL, 'process amount per iteration')
-            ->addArgument('offset', InputArgument::OPTIONAL, 'starts iteration at')
-            ->addOption('force', '-f', InputOption::VALUE_NONE, 'forces recreation');
+            ->addOption('stack', 's', InputOption::VALUE_OPTIONAL, 'process amount per iteration')
+            ->addOption('offset', 'o', InputOption::VALUE_OPTIONAL, 'process amount per iteration')
+            ->addOption('force', 'f', InputOption::VALUE_NONE, 'forces recreation')
+            ->addOption('setCollection', 'c', InputOption::VALUE_OPTIONAL | InputOption::VALUE_IS_ARRAY, 'only generates medias for specified collection')
+            ->addOption('ignoreCollection', 'i', InputOption::VALUE_OPTIONAL | InputOption::VALUE_IS_ARRAY, 'ignores specified collection');
     }
 
     /**
@@ -91,38 +93,45 @@ class GenerateWebpImages extends ShopwareCommand
      */
     protected function execute(InputInterface $input, OutputInterface $output)
     {
-        $mediaCount = $this->webpRepository->countMedias();
-        $offset = $input->getArgument('offset') ?? 0;
-        $stack = $input->getArgument('stack') ?? $mediaCount;
+        $mediaCount = $this->webpRepository->countMedias($input->getOption('setCollection'), $input->getOption('ignoreCollection'));
+        $offset = $input->getOption('offset') ?? 0;
+        $stack = $input->getOption('stack') ?? $mediaCount;
         $output->writeln('STACK: ' . $stack);
         $output->writeln('OFFSET: ' . $offset);
 
-        $this->buildImageStack($input->getOption('force'), $output, $offset, $mediaCount, $stack);
+        $arguments = new Arguments(
+            $input->getOption('force') ?? false,
+            $input->getOption('setCollection') ?? [],
+            $input->getOption('ignoreCollection') ?? [],
+            $input->getOption('stack') ?? $mediaCount,
+            $input->getOption('offset') ?? 0
+        );
+
+        $this->buildImageStack($output, $mediaCount, $arguments);
     }
 
     /**
-     * @param bool            $force
      * @param OutputInterface $output
-     * @param $offset
-     * @param int $mediaCount
-     * @param $stack
+     * @param int             $mediaCount
+     * @param Arguments       $arguments
      */
-    protected function buildImageStack(bool $force, OutputInterface $output, $offset, int $mediaCount, $stack)
+    protected function buildImageStack(OutputInterface $output, int $mediaCount, Arguments $arguments)
     {
-        for ($i = $offset; $i <= $mediaCount + $stack; $i += $stack) {
-            $stackMedia = $this->webpRepository->findByOffset($stack, $i);
+        for ($i = $arguments->getOffset(); $i <= $mediaCount + $arguments->getStack(); $i += $arguments->getStack()) {
+            $stackMedia = $this->webpRepository->findByOffset($arguments->getStack(), $i,
+                $arguments->getCollectionsToUse(), $arguments->getCollectionsToIgnore());
             $progress = new ProgressBar($output, count($stackMedia));
             $progress->start();
-            $this->buildImagesByStack($force, $output, $stackMedia, $progress);
+            $this->buildImagesByStack($arguments->isForce(), $output, $stackMedia, $progress);
             $progress->finish();
         }
     }
 
     /**
-     * @param bool                $force
-     * @param OutputInterface     $output
-     * @param \Doctrine\ORM\Query $stackMedia
-     * @param ProgressBar         $progress
+     * @param bool            $force
+     * @param OutputInterface $output
+     * @param array           $stackMedia
+     * @param ProgressBar     $progress
      */
     protected function buildImagesByStack(bool $force, OutputInterface $output, array $stackMedia, ProgressBar $progress)
     {
